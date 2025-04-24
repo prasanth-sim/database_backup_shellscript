@@ -8,7 +8,6 @@ log_message() {
     local message="$1"
     echo "$(date "+%H:%M:%S") $message" | tee -a "$LOG_FILE"
 }
-
 # Load config
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
