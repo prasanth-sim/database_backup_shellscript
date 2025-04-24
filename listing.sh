@@ -9,7 +9,6 @@ load_config() {
         source "$CONFIG_FILE"
     fi
 }
-
 # Save current configuration
 save_config() {
     mkdir -p "$(dirname "$CONFIG_FILE")"
