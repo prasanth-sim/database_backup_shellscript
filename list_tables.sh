@@ -1,37 +1,12 @@
 #!/bin/bash
 
-# Default config file path
-CONFIG_FILE="${HOME}/.db_script_config"
+# Include the configuration functions
+source "./config.sh"
 
-# Load previous configuration
-load_config() {
-    if [ -f "$CONFIG_FILE" ]; then
-        source "$CONFIG_FILE"
-    fi
-}
-
-# Save current configuration
-save_config() {
-    mkdir -p "$(dirname "$CONFIG_FILE")"
-    cat <<EOF > "$CONFIG_FILE"
-DBNAME="$DBNAME"
-DBUSER="$DBUSER"
-DBHOST="$DBHOST"
-DBPORT="$DBPORT"
-OUTDIR="$OUTDIR"
-EOF
-}
-
-# Ask user for confirmation to use existing config
-confirm_config() {
-    echo "Current configuration:"
-    echo "Database Name: $DBNAME"
-    echo "User: $DBUSER"
-    echo "Host: $DBHOST"
-    echo "Port: $DBPORT"
-    echo "Output Directory: $OUTDIR"
-    read -p "Do you want to use these settings? (y/n) [y]: " CONFIRM
-    CONFIRM=${CONFIRM:-y}
+# Function to log messages
+log_message() {
+    local message="$1"
+    echo "$(date "+%H:%M:%S") $message" | tee -a "$LOG_FILE"
 }
 
 # Test database connection
@@ -41,12 +16,6 @@ test_connection() {
         log_message "ERROR: Failed to authenticate with the database. Please check your credentials."
         exit 1
     fi
-}
-
-# Function to log messages
-log_message() {
-    local message="$1"
-    echo "$(date "+%H:%M:%S") $message" | tee -a "$LOG_FILE"
 }
 
 # Load existing config if available
@@ -59,18 +28,7 @@ else
 fi
 
 if [ "$CONFIRM" == "n" ]; then
-    # Prompt for new configuration if not confirmed or missing
-    read -p "Enter database name: " DBNAME
-    read -p "Enter PostgreSQL user: " DBUSER
-    read -p "Enter host [localhost]: " DBHOST
-    DBHOST=${DBHOST:-localhost}
-    read -p "Enter port [5432]: " DBPORT
-    DBPORT=${DBPORT:-5432}
-    read -p "Enter output directory [${HOME}]: " OUTDIR
-    OUTDIR=${OUTDIR:-${HOME}}
-
-    # Save the new configuration
-    save_config
+    get_new_config
 fi
 
 # Always ask for the password
@@ -93,39 +51,32 @@ test_connection
 
 log_message "Starting script execution."
 
-# Get all user tables and save to a timestamped alltables file
-ALLTABLES_FILE="$RUN_DIR/alltables_$TIMESTAMP.txt"
+# Get all user tables and save to alltables.txt
+ALLTABLES_FILE="$RUN_DIR/alltables.txt"
 psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -Atc \
     "SELECT schemaname || '.' || tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema');" \
     > "$ALLTABLES_FILE"
 log_message "Generated list of all tables."
 
-# Files for tables with and without data
-WITHDATA_FILE="$RUN_DIR/withdata_$TIMESTAMP.txt"
-WITHOUTDATA_FILE="$RUN_DIR/withoutdata_$TIMESTAMP.txt"
-
-# Clear (or create) output files
-> "$WITHDATA_FILE"
-> "$WITHOUTDATA_FILE"
+# Files for data presence
+CONTAINS_DATA_FILE="$RUN_DIR/contains_data.txt"
+EMPTY_FILE="$RUN_DIR/empty.txt"
+> "$CONTAINS_DATA_FILE"
+> "$EMPTY_FILE"
 
 # Loop through tables and check for data
 log_message "Checking tables for data..."
 while IFS= read -r table; do
     count=$(psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -Atc "SELECT COUNT(*) FROM $table;")
     if [ "$count" -gt 0 ]; then
-        echo "$table" >> "$WITHDATA_FILE"
-        log_message "Table $table contains data."
+        echo "$table" >> "$CONTAINS_DATA_FILE"
+        log_message "Table $table contains $count rows."
     else
-        echo "$table" >> "$WITHOUTDATA_FILE"
-        log_message "Table $table does not contain data."
+        echo "$table" >> "$EMPTY_FILE"
+        log_message "Table $table is empty."
     fi
 done < "$ALLTABLES_FILE"
 
-log_message "Completed processing tables."
-
-log_message "Files generated:"
-log_message " - $ALLTABLES_FILE"
-log_message " - $WITHDATA_FILE"
-log_message " - $WITHOUTDATA_FILE"
 
 log_message "Script execution completed successfully."
+
