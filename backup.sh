@@ -187,5 +187,3 @@ case "$CHOICE" in
 esac
 
 log_message "Backup process completed!"
-backups.txt
-Displaying backups.txt.
