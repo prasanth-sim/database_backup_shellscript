@@ -52,7 +52,7 @@ log_message "Using $JOBS parallel jobs."
 # Create unique folder for this backup run
 read -p "Enter the output directory: " OUTPUT_DIR
 mkdir -p "$OUTPUT_DIR/logs"
-TIMESTAMP=$(date +'%Y-%m-%d_%H-%M-%S')"
+TIMESTAMP=$(date +'%Y-%m-%d_%H-%M-%S')
 BACKUP_DIR="$OUTPUT_DIR/backups/$TIMESTAMP"
 mkdir -p "$BACKUP_DIR"
 
