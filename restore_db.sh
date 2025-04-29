@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Source the configuration script
-source ./config_db.sh
+# Source the configuration script (no password stored there)
+source ./config_restore.sh
 
 # ----------------------------------
 # General Helper Functions
@@ -16,7 +16,7 @@ log_message() {
 # Function to test database connection
 test_connection() {
     log_message "Testing database connection..."
-    if ! psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -c "\q" &>/dev/null; then
+    if ! psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -c "\q" &>/dev/null; then
         log_message "ERROR: Failed to authenticate with the database. Please check your credentials."
         exit 1
     fi
@@ -26,10 +26,9 @@ test_connection() {
 # Database Management
 # ----------------------------------
 
-# Function to check if the database exists
 check_database() {
     log_message "Checking if database '$DBNAME' exists..."
-    DATABASE_EXISTS=$(psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -tAc "SELECT 1 FROM pg_database WHERE datname = '$DBNAME';")
+    DATABASE_EXISTS=$(psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -tAc "SELECT 1 FROM pg_database WHERE datname = '$DBNAME';")
 
     if [ "$DATABASE_EXISTS" == "1" ]; then
         log_message "Database '$DBNAME' already exists."
@@ -40,7 +39,6 @@ check_database() {
     fi
 }
 
-# Function to manage an existing database
 manage_existing_database() {
     echo "Select action for the existing database:"
     echo "1. Skip (keep existing database)"
@@ -63,7 +61,6 @@ manage_existing_database() {
     esac
 }
 
-# Function to create a new database
 create_database() {
     createdb -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" "$DBNAME"
     if [ $? -eq 0 ]; then
@@ -78,7 +75,6 @@ create_database() {
 # Restore Operations
 # ----------------------------------
 
-# Function to read excluded tables from the file
 read_excluded_tables() {
     if [ ! -f "$EXCLUDE_FILE" ]; then
         log_message "ERROR: Exclude file '$EXCLUDE_FILE' does not exist."
@@ -90,7 +86,6 @@ read_excluded_tables() {
     log_message "Excluded tables: $(awk '{print $1}' "$EXCLUDE_FILE" | tr '\n' ', ')"
 }
 
-# Function to prompt for the restore type
 restore_type_prompt() {
     echo "Select restore type:"
     echo "1. Schema Only"
@@ -113,7 +108,6 @@ restore_type_prompt() {
     esac
 }
 
-# Function to restore schema only
 restore_schema_only() {
     read -p "Enter the path to the schema-only backup directory: " BACKUP_DIR
     if [ ! -d "$BACKUP_DIR" ]; then
@@ -131,7 +125,6 @@ restore_schema_only() {
     fi
 }
 
-# Function to restore schema with data
 restore_schema_with_data() {
     read -p "Enter the path to the schema-with-data backup directory: " BACKUP_DIR
     if [ ! -d "$BACKUP_DIR" ]; then
@@ -141,7 +134,6 @@ restore_schema_with_data() {
 
     log_message "Restoring schema-with-data backup from: $BACKUP_DIR..."
 
-    # Notify user about excluded tables
     if [ -f "$EXCLUDE_FILE" ]; then
         log_message "Excluded tables during the backup:"
         while read -r table; do
@@ -151,7 +143,6 @@ restore_schema_with_data() {
         log_message "WARNING: Exclude file '$EXCLUDE_FILE' not found. All tables may be restored."
     fi
 
-    # Perform the restore
     pg_restore -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" $EXCLUDE_CMD --clean --if-exists --no-owner --no-privileges -Fd -j "$JOBS" "$BACKUP_DIR"
     if [ $? -eq 0 ]; then
         log_message "Schema-with-data restore completed successfully."
@@ -164,16 +155,13 @@ restore_schema_with_data() {
 # ----------------------------------
 # Main Script Execution
 # ----------------------------------
-
-# Prompt for password
+load_config
+# Prompt for password (but do not store it)
 read -s -p "Enter password: " DBPASS
 echo
 
-# Export password for PostgreSQL commands
+# Export password only for this session
 export PGPASSWORD="$DBPASS"
-
-# Load configuration
-load_config
 
 # Test database connection
 test_connection
@@ -181,7 +169,7 @@ test_connection
 # Check and manage database existence
 check_database
 
-# Prompt user for parallel jobs
+# Prompt for parallel jobs
 CPU_CORES=$(nproc)
 read -p "Enter number of parallel jobs (max: $CPU_CORES): " JOBS
 if (( JOBS > CPU_CORES )); then
@@ -198,6 +186,9 @@ restore_type_prompt
 
 # Final log message
 LOG_DIR="${PWD}/logs"
+# Ensure the log directory exists
+mkdir -p "$LOG_DIR"
 log_message "Restore process completed successfully!"
 log_message "Database restored to: $DBNAME"
 log_message "Logs are stored in: $LOG_DIR"
+
