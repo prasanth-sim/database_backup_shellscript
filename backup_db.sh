@@ -98,9 +98,9 @@ esac
 # Compress the backups
 log_message "Compressing backups..."
 if [ "$BACKUP_TYPE" -eq 1 ]; then
-    tar -czf "$OUTPUT_DIR/schema_only_backup.tar.gz" -C "$BACKUP_DIR/schema_only_backup" .
+    tar -czf "$BACKUP_DIR/schema_only_backup.tar.gz" -C "$BACKUP_DIR/schema_only_backup" .
 elif [ "$BACKUP_TYPE" -eq 2 ]; then
-    tar -czf "$OUTPUT_DIR/schema_with_data_backup.tar.gz" -C "$BACKUP_DIR/schema_with_data_backup" .
+    tar -czf "$BACKUP_DIR/schema_with_data_backup.tar.gz" -C "$BACKUP_DIR/schema_with_data_backup" .
 fi
 log_message "Backups compressed successfully."
 
