@@ -17,14 +17,20 @@ prompt_config() {
     DBHOST=${DBHOST:-localhost}
     read -p "Enter port (default: 5432): " DBPORT
     DBPORT=${DBPORT:-5432}
-    read -p "Enter the path to the exclude file: " EXCLUDE_FILE
+    read -p "Enter the path to the exclude file (leave blank if not needed): " EXCLUDE_FILE
 
     # Save configuration to file
-    echo "DBNAME=$DBNAME" > "$CONFIG_FILE"
-    echo "DBUSER=$DBUSER" >> "$CONFIG_FILE"
-    echo "DBHOST=$DBHOST" >> "$CONFIG_FILE"
-    echo "DBPORT=$DBPORT" >> "$CONFIG_FILE"
-    echo "EXCLUDE_FILE=$EXCLUDE_FILE" >> "$CONFIG_FILE"
+    {
+        echo "DBNAME=$DBNAME"
+        echo "DBUSER=$DBUSER"
+        echo "DBHOST=$DBHOST"
+        echo "DBPORT=$DBPORT"
+    } > "$CONFIG_FILE"
+
+    # Save EXCLUDE_FILE only if provided
+    if [[ -n "$EXCLUDE_FILE" ]]; then
+        echo "EXCLUDE_FILE=$EXCLUDE_FILE" >> "$CONFIG_FILE"
+    fi
 
     log_message "Configuration saved to $CONFIG_FILE."
 }
@@ -38,7 +44,13 @@ load_config() {
         echo "User: $DBUSER"
         echo "Host: $DBHOST"
         echo "Port: $DBPORT"
-        echo "Exclude File: $EXCLUDE_FILE"
+
+        # Check if EXCLUDE_FILE is set before displaying it
+        if [[ -n "$EXCLUDE_FILE" ]]; then
+            echo "Exclude File: $EXCLUDE_FILE"
+        else
+            echo "No exclude file specified."
+        fi
 
         # Ask if the user wants to continue with this configuration
         read -p "Do you want to continue with this configuration? (y/n): " confirm
@@ -56,4 +68,3 @@ load_config() {
 
 # Main logic
 load_config
-
