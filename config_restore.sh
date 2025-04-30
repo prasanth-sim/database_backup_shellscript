@@ -1,75 +1,84 @@
 #!/bin/bash
 
-CONFIG_FILE="./restore_config.cfg"
+# Configuration file path
+CONFIG_FILE=~/.restore_config
 
-# Log message function
+# Function to log messages
 log_message() {
     local message="$1"
     echo "$(date "+%H:%M:%S") $message"
 }
 
-load_config() {
-    # Load previously saved configuration if it exists
-    if [[ -f "$CONFIG_FILE" ]]; then
-        log_message "Found existing configuration file: $CONFIG_FILE"
-        source "$CONFIG_FILE"
-
-        echo "Previously saved configuration:"
-        echo "  Database Host: $DBHOST"
-        echo "  Database Port: $DBPORT"
-        echo "  Database Name: $DBNAME"
-        echo "  Database User: $DBUSER"
-        echo "  Exclude File: $EXCLUDE_FILE"
-        echo
-
-        read -p "Would you like to reuse the previous configuration? (yes/no): " REUSE_CONFIG
-        if [[ "$REUSE_CONFIG" == "yes" ]]; then
-            log_message "Reusing previous configuration."
-            return
-        else
-            log_message "Updating configuration..."
-        fi
-    fi
-
-    # Prompt for database host
-    read -p "Enter database host (default: localhost): " DBHOST
-    DBHOST=${DBHOST:-localhost}
-
-    # Prompt for database port
-    read -p "Enter database port (default: 5432): " DBPORT
-    DBPORT=${DBPORT:-5432}
-
-    # Prompt for database name
+# Function to prompt user for configuration details
+prompt_config() {
     read -p "Enter target database name: " DBNAME
     if [[ -z "$DBNAME" ]]; then
         log_message "ERROR: Database name cannot be empty."
         exit 1
     fi
 
-    # Prompt for database username
-    read -p "Enter database username: " DBUSER
+    read -p "Enter PostgreSQL user: " DBUSER
     if [[ -z "$DBUSER" ]]; then
         log_message "ERROR: Username cannot be empty."
         exit 1
     fi
 
-    # Prompt for excluded tables file path
-    read -p "Enter path to the file with tables to exclude (optional): " EXCLUDE_FILE
-    if [[ ! -z "$EXCLUDE_FILE" && ! -f "$EXCLUDE_FILE" ]]; then
+    read -p "Enter host (default: localhost): " DBHOST
+    DBHOST=${DBHOST:-localhost}
+
+    read -p "Enter port (default: 5432): " DBPORT
+    DBPORT=${DBPORT:-5432}
+
+    read -p "Enter path to the exclude file (leave blank if not needed): " EXCLUDE_FILE
+    if [[ -n "$EXCLUDE_FILE" && ! -f "$EXCLUDE_FILE" ]]; then
         log_message "ERROR: Specified exclude file '$EXCLUDE_FILE' does not exist."
         exit 1
     fi
 
-    # Save the configuration
-    log_message "Saving configuration to $CONFIG_FILE..."
-    cat > "$CONFIG_FILE" <<EOL
-DBHOST=$DBHOST
-DBPORT=$DBPORT
-DBNAME=$DBNAME
-DBUSER=$DBUSER
-EXCLUDE_FILE=$EXCLUDE_FILE
-EOL
+    # Save configuration to file
+    {
+        echo "DBNAME=$DBNAME"
+        echo "DBUSER=$DBUSER"
+        echo "DBHOST=$DBHOST"
+        echo "DBPORT=$DBPORT"
+    } > "$CONFIG_FILE"
 
-    log_message "Configuration saved successfully."
+    if [[ -n "$EXCLUDE_FILE" ]]; then
+        echo "EXCLUDE_FILE=$EXCLUDE_FILE" >> "$CONFIG_FILE"
+    fi
+
+    log_message "Configuration saved to $CONFIG_FILE."
 }
+
+# Function to load existing configuration
+load_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+        echo "Loaded existing configuration:"
+        echo "Database Name: $DBNAME"
+        echo "User: $DBUSER"
+        echo "Host: $DBHOST"
+        echo "Port: $DBPORT"
+
+        if [[ -n "$EXCLUDE_FILE" ]]; then
+            echo "Exclude File: $EXCLUDE_FILE"
+        else
+            echo "No exclude file specified."
+        fi
+
+        read -p "Do you want to continue with this configuration? (y/n): " confirm
+        if [[ "$confirm" =~ ^[Nn]$ ]]; then
+            log_message "User chose to update the configuration."
+            prompt_config
+        else
+            log_message "Continuing with the existing configuration."
+        fi
+    else
+        log_message "Configuration file not found. Prompting for configuration details..."
+        prompt_config
+    fi
+}
+
+# Main logic
+load_config
 
