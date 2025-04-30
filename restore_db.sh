@@ -1,79 +1,61 @@
 #!/bin/bash
-
-# Source the configuration script (no password stored there)
-source ./config_restore.sh
-
-# ----------------------------------
-# General Helper Functions
-# ----------------------------------
-
-# Function to log messages
 log_message() {
     local message="$1"
     echo "$(date "+%H:%M:%S") $message"
 }
 
-# Function to test database connection
+if [ -f "./config_restore.sh" ]; then
+    source ./config_restore.sh
+    log_message "Configuration loaded from config_restore.sh."
+else
+    log_message "ERROR: Configuration file 'config_restore.sh' not found."
+    exit 1
+fi
+
 test_connection() {
     log_message "Testing database connection..."
-    if ! psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -c "\q" &>/dev/null; then
-        log_message "ERROR: Failed to authenticate with the database. Please check your credentials."
+    if ! psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -c "\q" &>/dev/null; then
+        log_message "ERROR: Failed to connect to PostgreSQL. Check credentials or connection."
         exit 1
     fi
 }
 
-# ----------------------------------
-# Database Management
-# ----------------------------------
-
 check_database() {
     log_message "Checking if database '$DBNAME' exists..."
-    DATABASE_EXISTS=$(psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -tAc "SELECT 1 FROM pg_database WHERE datname = '$DBNAME';")
+    local exists
+    exists=$(psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$DBNAME';")
 
-    if [ "$DATABASE_EXISTS" == "1" ]; then
+    if [[ "$exists" == "1" ]]; then
         log_message "Database '$DBNAME' already exists."
         manage_existing_database
     else
-        log_message "Database '$DBNAME' does not exist. Creating it now..."
+        log_message "Database '$DBNAME' does not exist. Creating..."
         create_database
     fi
 }
 
 manage_existing_database() {
-    echo "Select action for the existing database:"
-    echo "1. Skip (keep existing database)"
-    echo "2. Recreate (drop and create a new database)"
-    read -p "Enter choice (1/2): " DB_ACTION
-
-    case "$DB_ACTION" in
-        1)
-            log_message "Skipping database creation. Existing database will be used."
-            ;;
+    echo "1. Skip (use existing)"
+    echo "2. Recreate (drop and recreate)"
+    read -p "Enter choice (1/2): " choice
+    case "$choice" in
+        1) log_message "Using existing database." ;;
         2)
-            log_message "Recreating database '$DBNAME'..."
+            log_message "Dropping and recreating '$DBNAME'..."
             dropdb -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" "$DBNAME"
             create_database
             ;;
-        *)
-            log_message "ERROR: Invalid choice. Exiting."
-            exit 1
-            ;;
+        *) log_message "ERROR: Invalid choice."; exit 1 ;;
     esac
 }
 
 create_database() {
     createdb -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" "$DBNAME"
-    if [ $? -eq 0 ]; then
-        log_message "Database '$DBNAME' has been successfully created."
-    else
+    if [ $? -ne 0 ]; then
         log_message "ERROR: Failed to create database '$DBNAME'."
         exit 1
     fi
 }
-
-# ----------------------------------
-# Restore Operations
-# ----------------------------------
 
 read_excluded_tables() {
     if [ ! -f "$EXCLUDE_FILE" ]; then
@@ -85,6 +67,8 @@ read_excluded_tables() {
     EXCLUDE_CMD=$(awk '{print "--exclude-table-data=" $1}' "$EXCLUDE_FILE" | tr '\n' ' ')
     log_message "Excluded tables: $(awk '{print $1}' "$EXCLUDE_FILE" | tr '\n' ', ')"
 }
+
+# Restore Operations
 
 restore_type_prompt() {
     echo "Select restore type:"
@@ -132,6 +116,8 @@ restore_schema_with_data() {
         exit 1
     fi
 
+    read_excluded_tables
+
     log_message "Restoring schema-with-data backup from: $BACKUP_DIR..."
 
     if [ -f "$EXCLUDE_FILE" ]; then
@@ -143,7 +129,7 @@ restore_schema_with_data() {
         log_message "WARNING: Exclude file '$EXCLUDE_FILE' not found. All tables may be restored."
     fi
 
-    pg_restore -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" $EXCLUDE_CMD --clean --if-exists --no-owner --no-privileges -Fd -j "$JOBS" "$BACKUP_DIR"
+    pg_restore -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" --clean --if-exists --no-owner --no-privileges -Fd -j "$JOBS" "$BACKUP_DIR"
     if [ $? -eq 0 ]; then
         log_message "Schema-with-data restore completed successfully."
     else
@@ -152,43 +138,33 @@ restore_schema_with_data() {
     fi
 }
 
-# ----------------------------------
-# Main Script Execution
-# ----------------------------------
-load_config
-# Prompt for password (but do not store it)
-read -s -p "Enter password: " DBPASS
-echo
 
-# Export password only for this session
+# Prompt for password
+read -s -p "Enter password for $DBUSER: " DBPASS
+echo
 export PGPASSWORD="$DBPASS"
 
-# Test database connection
+# Test connection and prepare database
 test_connection
-
-# Check and manage database existence
 check_database
 
-# Prompt for parallel jobs
+# Create logs directory
+read -p "Enter the log directory: " OUTPUT_DIR
+mkdir -p "$OUTPUT_DIR/logs"
+TIMESTAMP=$(date +'%Y-%m-%d_%H-%M-%S')
+LOG_DIR="$OUTPUT_DIR/$TIMESTAMP"
+mkdir -p "$LOG_DIR"
+
+# Set number of parallel jobs
 CPU_CORES=$(nproc)
-read -p "Enter number of parallel jobs (max: $CPU_CORES): " JOBS
-if (( JOBS > CPU_CORES )); then
-    log_message "Specified jobs exceed available CPU cores. Setting jobs to $CPU_CORES."
-    JOBS=$CPU_CORES
-elif (( JOBS < 1 )); then
-    log_message "Invalid input for jobs. Setting jobs to 1."
-    JOBS=1
-fi
+read -p "Enter number of parallel jobs (max $CPU_CORES): " JOBS
+JOBS=$(( JOBS > CPU_CORES ? CPU_CORES : (JOBS < 1 ? 1 : JOBS) ))
 log_message "Using $JOBS parallel jobs."
 
-# Prompt for restore type
+# Launch restore type prompt
 restore_type_prompt
 
-# Final log message
-LOG_DIR="${PWD}/logs"
-# Ensure the log directory exists
-mkdir -p "$LOG_DIR"
-log_message "Restore process completed successfully!"
-log_message "Database restored to: $DBNAME"
-log_message "Logs are stored in: $LOG_DIR"
+# Done
+log_message "Restore script completed."
+log_message "Logs stored in: $LOG_DIR"
 
