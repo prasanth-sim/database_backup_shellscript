@@ -1,0 +1,5 @@
+audit_table
+nrp_outbound_oracle_base_price_archive
+nrp_factresultingcost_local
+nrp_edw_fixedprice
+nrp_int_ob_baseprice_archive
