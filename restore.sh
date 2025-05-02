@@ -1,133 +1,102 @@
 #!/bin/bash
 
-# Configuration
-CONFIG_FILE=~/.restore_config
+CONFIG_FILE="$HOME/.backup_config"
 
-# Function to log messages
-log_message() {
-    local message="$1"
-    echo "$(date "+%H:%M:%S") $message" | tee -a "$LOG_FILE"
-}
-# Load config
 load_config() {
-    if [ -f "$CONFIG_FILE" ]; then
-        source "$CONFIG_FILE"
-        echo "Loaded existing configuration:"
-        echo "Database Name: $DBNAME"
-        echo "User: $DBUSER"
-        echo "Host: $DBHOST"
-        echo "Port: $DBPORT"
-        read -p "Use these settings? (y/n): " USE_PREVIOUS
-        if [ "$USE_PREVIOUS" != "y" ]; then
-            prompt_config
-        fi
-    else
-        prompt_config
+  if [[ -f "$CONFIG_FILE" ]]; then
+    echo "Loaded existing configuration:"
+    source "$CONFIG_FILE"
+    echo "Database Name: $DB_NAME"
+    echo "User: $DB_USER"
+    echo "Host: $DB_HOST"
+    echo "Port: $DB_PORT"
+    echo "Exclude File: $EXCLUDE_FILE"
+    read -p "Do you want to continue with this configuration? (y/n): " answer
+    if [[ "$answer" != "y" ]]; then
+      update_config
     fi
+  else
+    update_config
+  fi
 }
 
-# Prompt for new configuration
-prompt_config() {
-    read -p "Enter database name: " DBNAME
-    read -p "Enter PostgreSQL user: " DBUSER
-    read -p "Enter host (default: localhost): " DBHOST
-    DBHOST=${DBHOST:-localhost}
-    read -p "Enter port (default: 5432): " DBPORT
-    DBPORT=${DBPORT:-5432}
-    echo "DBNAME=$DBNAME" > "$CONFIG_FILE"
-    echo "DBUSER=$DBUSER" >> "$CONFIG_FILE"
-    echo "DBHOST=$DBHOST" >> "$CONFIG_FILE"
-    echo "DBPORT=$DBPORT" >> "$CONFIG_FILE"
+update_config() {
+  read -p "Enter database name: " DB_NAME
+  read -p "Enter PostgreSQL user: " DB_USER
+  read -p "Enter host (default: localhost): " DB_HOST
+  DB_HOST=${DB_HOST:-localhost}
+  read -p "Enter port (default: 5432): " DB_PORT
+  DB_PORT=${DB_PORT:-5432}
+  read -p "Enter the path to the exclude file: " EXCLUDE_FILE
+
+  echo "DB_NAME=$DB_NAME" > "$CONFIG_FILE"
+  echo "DB_USER=$DB_USER" >> "$CONFIG_FILE"
+  echo "DB_HOST=$DB_HOST" >> "$CONFIG_FILE"
+  echo "DB_PORT=$DB_PORT" >> "$CONFIG_FILE"
+  echo "EXCLUDE_FILE=$EXCLUDE_FILE" >> "$CONFIG_FILE"
 }
 
-# Function to test connection
-test_connection() {
-    log_message "Testing connection to database '$DBNAME'..."
-    if PGPASSWORD="$DBPASS" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -c '\q' 2>/dev/null; then
-        log_message "SUCCESS: Connection to '$DBNAME' is successful."
-    else
-        log_message "ERROR: Unable to connect to database '$DBNAME'. Check credentials and network."
-        exit 1
-    fi
-}
-
-# Load configuration
 load_config
 
-# Prompt for password
-read -s -p "Enter password: " DBPASS
+read -s -p "Enter password: " DB_PASS
 echo
-export PGPASSWORD="$DBPASS"
 
-# Test database connection
-test_connection
+read -p "Enter number of parallel jobs (max: 4): " PARALLEL_JOBS
+PARALLEL_JOBS=${PARALLEL_JOBS:-2}
+echo "$(date +%H:%M:%S) Using $PARALLEL_JOBS parallel jobs."
 
-# Prompt for output/log directory
-read -p "Enter the log/output directory: " OUTPUT_DIR
-mkdir -p "$OUTPUT_DIR/logs"
+read -p "Enter the output directory: " OUTPUT_DIR
 
-# Create log file
-SCRIPT_NAME=$(basename "$0" | sed 's/\.sh//')
-LOG_FILE="$OUTPUT_DIR/logs/$(date +'%Y_%m_%d_%H_%M')_${SCRIPT_NAME}.log"
+echo "$(date +%H:%M:%S) Testing database connection..."
+PGPASSWORD="$DB_PASS" psql -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" -c '\q'
+if [[ $? -ne 0 ]]; then
+  echo "ERROR: Could not connect to the database."
+  exit 1
+fi
 
-# Check if database exists
-log_message "Checking if database '$DBNAME' exists..."
-if ! psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -tAc "SELECT 1 FROM pg_database WHERE datname = '$DBNAME'" | grep -q 1; then
-    log_message "Database not found. Creating..."
-    createdb -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" "$DBNAME"
-    if [ $? -ne 0 ]; then
-        log_message "ERROR: Failed to create database."
-        exit 1
-    fi
+echo "Select restore type:"
+echo "1. Only Schema"
+echo "2. Schema with Data"
+read -p "Enter choice (1/2): " CHOICE
+
+if [[ "$CHOICE" == "1" ]]; then
+  echo "$(date +%H:%M:%S) Schema-only restore selected."
+  pg_restore -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" \
+    -s -j "$PARALLEL_JOBS" --verbose "$OUTPUT_DIR"/backups/*/schema_with_data_backup > restore.log 2>&1
+
+  if [[ $? -ne 0 ]]; then
+    echo "$(date +%H:%M:%S) ERROR: Schema-only restore failed."
+    exit 1
+  fi
+
+  echo "$(date +%H:%M:%S) Schema-only restore completed successfully."
+
+elif [[ "$CHOICE" == "2" ]]; then
+  echo "$(date +%H:%M:%S) Schema-with-data restore selected."
+  echo "$(date +%H:%M:%S) Reading excluded tables from: $EXCLUDE_FILE"
+
+  excluded_tables=$(grep -v '^\s*$' "$EXCLUDE_FILE" | paste -sd, -)
+  echo "$(date +%H:%M:%S) Excluded tables: $excluded_tables"
+
+  echo "$(date +%H:%M:%S) Starting schema-with-data restore..."
+  pg_restore -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" \
+    -j "$PARALLEL_JOBS" --verbose "$OUTPUT_DIR"/backups/*/schema_with_data_backup > restore.log 2>&1
+
+  if [[ $? -ne 0 ]]; then
+    echo "$(date +%H:%M:%S) ERROR: Schema-with-data restore failed."
+    exit 1
+  fi
+
+  # Truncate excluded tables after restore
+  if [[ -n "$excluded_tables" ]]; then
+    echo "$(date +%H:%M:%S) Truncating excluded tables after restore..."
+    PGPASSWORD="$DB_PASS" psql -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" \
+      -c "TRUNCATE $excluded_tables;"
+  fi
+
+  echo "$(date +%H:%M:%S) Schema-with-data restore completed successfully."
+
 else
-    log_message "Database already exists."
+  echo "Invalid choice. Exiting."
+  exit 1
 fi
-
-# Determine parallel jobs
-CPU_CORES=$(nproc)
-read -p "Enter number of parallel jobs for restore (max: $CPU_CORES): " JOBS
-if (( JOBS > CPU_CORES )); then
-    log_message "Specified jobs exceed available CPU cores. Setting to $CPU_CORES."
-    JOBS=$CPU_CORES
-elif (( JOBS < 1 )); then
-    log_message "Invalid input. Setting jobs to 1."
-    JOBS=1
-fi
-log_message "Using $JOBS parallel jobs for restore."
-
-# Number of files
-read -p "Enter number of backup files to restore: " NUMFILES
-
-# Restore loop
-for (( i=1; i<=NUMFILES; i++ )); do
-    read -p "Enter path to backup file #$i (.tar.gz): " BACKUPFILE
-
-    if [ ! -f "$BACKUPFILE" ]; then
-        log_message "ERROR: File not found - $BACKUPFILE"
-        continue
-    fi
-
-    EXTRACTED_DIR=$(mktemp -d)
-    log_message "Extracting $BACKUPFILE..."
-    tar -xzf "$BACKUPFILE" -C "$EXTRACTED_DIR"
-    if [ $? -ne 0 ]; then
-        log_message "ERROR: Failed to extract $BACKUPFILE"
-        rm -rf "$EXTRACTED_DIR"
-        continue
-    fi
-
-    log_message "Restoring $BACKUPFILE into $DBNAME..."
-    pg_restore -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -j "$JOBS" --clean --if-exists --no-owner --no-privileges "$EXTRACTED_DIR"
-    if [ $? -eq 0 ]; then
-        log_message "SUCCESS: Restored $BACKUPFILE"
-    else
-        log_message "ERROR: Failed to restore $BACKUPFILE"
-    fi
-
-    rm -rf "$EXTRACTED_DIR"
-done
-
-log_message "Restore process completed."
-unset PGPASSWORD
-Restore script.txt
-Displaying backups.txt.
