@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Source the configuration script
-source ./config_db.sh
+source ./config.sh
 
 # Function to log messages
 log_message() {
     local message="$1"
-    echo "$(date "+%H:%M:%S") $message"
+    echo "$(date "+%H:%M:%S") $message" | tee -a "$LOG_FILE"
 }
 
 # Function to test database connection
@@ -18,26 +18,36 @@ test_connection() {
     fi
 }
 
-# Function to read excluded tables from the file
+# Function to read excluded tables (optional for full DB backup)
 read_excluded_tables() {
-    if [ ! -f "$EXCLUDE_FILE" ]; then
-        log_message "ERROR: Exclude file '$EXCLUDE_FILE' does not exist."
-        exit 1
-    fi
-
     log_message "Reading excluded tables from: $EXCLUDE_FILE"
-    EXCLUDE_CMD=$(awk '{print "--exclude-table-data=" $1}' "$EXCLUDE_FILE" | tr '\n' ' ')
-    log_message "Excluded tables: $(awk '{print $1}' "$EXCLUDE_FILE" | tr '\n' ', ')"
+    if [ -f "$EXCLUDE_FILE" ]; then
+        EXCLUDE_CMD=$(awk '{print "--exclude-table-data=" $1}' "$EXCLUDE_FILE" | tr '\n' ' ')
+        log_message "Excluded tables: $(awk '{print $1}' "$EXCLUDE_FILE" | paste -sd', ' -)"
+    else
+        log_message "Exclude file not found, taking full backup (no exclusions)."
+        EXCLUDE_CMD=""
+    fi
 }
 
 # Prompt for password
 read -s -p "Enter password: " DBPASS
 echo
-
-# Export password for PostgreSQL commands
 export PGPASSWORD="$DBPASS"
 
-# Prompt user for parallel jobs
+# Create backup directory and log file
+read -p "Enter the output directory: " OUTPUT_DIR
+mkdir -p "$OUTPUT_DIR/logs"
+SCRIPT_NAME=$(basename "$0" | sed 's/\.sh//')
+LOG_FILE="$OUTPUT_DIR/logs/$(date +'%Y_%m_%d_%H_%M')_${SCRIPT_NAME}.log"
+TIMESTAMP=$(date +'%Y-%m-%d_%H-%M-%S')
+BACKUP_DIR="$OUTPUT_DIR/backups/$TIMESTAMP"
+mkdir -p "$BACKUP_DIR"
+
+# Test DB connection
+test_connection
+
+# Prompt for parallel jobs
 CPU_CORES=$(nproc)
 read -p "Enter number of parallel jobs (max: $CPU_CORES): " JOBS
 if (( JOBS > CPU_CORES )); then
@@ -49,21 +59,12 @@ elif (( JOBS < 1 )); then
 fi
 log_message "Using $JOBS parallel jobs."
 
-# Create unique folder for this backup run
-read -p "Enter the output directory: " OUTPUT_DIR
-mkdir -p "$OUTPUT_DIR/logs"
-TIMESTAMP=$(date +'%Y-%m-%d_%H-%M-%S')
-BACKUP_DIR="$OUTPUT_DIR/backups/$TIMESTAMP"
-mkdir -p "$BACKUP_DIR"
-
-# Test database connection
-test_connection
-
-# Ask the user for backup type
+# Backup type menu
 echo "Select backup type:"
-echo "1. Only Schema"
-echo "2. Schema with Data"
-read -p "Enter choice (1/2): " BACKUP_TYPE
+echo "1. Only Schema (entire DB)"
+echo "2. Schema with Data (entire DB)"
+echo "3. Single Table (schema + data)"
+read -p "Enter choice (1/2/3): " BACKUP_TYPE
 
 case "$BACKUP_TYPE" in
     1)
@@ -89,22 +90,25 @@ case "$BACKUP_TYPE" in
             exit 1
         fi
         ;;
+    3)
+        read -p "Enter the table name to back up: " TABLE_NAME
+        log_message "Single-table backup selected for table: $TABLE_NAME"
+        pg_dump -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$DBNAME" -t "$TABLE_NAME" -Fd -j "$JOBS" -f "$BACKUP_DIR/table_${TABLE_NAME}_backup"
+        if [ $? -eq 0 ]; then
+            log_message "Table backup completed successfully."
+        else
+            log_message "ERROR: Table backup failed."
+            exit 1
+        fi
+        ;;
     *)
-        log_message "ERROR: Invalid choice. Please select either 1 or 2."
+        log_message "ERROR: Invalid choice. Please select 1, 2, or 3."
         exit 1
         ;;
 esac
 
-# Compress the backups
-log_message "Compressing backups..."
-if [ "$BACKUP_TYPE" -eq 1 ]; then
-    tar -czf "$BACKUP_DIR/schema_only_backup.tar.gz" -C "$BACKUP_DIR/schema_only_backup" .
-elif [ "$BACKUP_TYPE" -eq 2 ]; then
-    tar -czf "$BACKUP_DIR/schema_with_data_backup.tar.gz" -C "$BACKUP_DIR/schema_with_data_backup" .
-fi
-log_message "Backups compressed successfully."
-
-# Final log message
+# Final message
 log_message "Backup process completed!"
 log_message "Backups are stored in: $BACKUP_DIR"
 log_message "Logs are stored in: $OUTPUT_DIR/logs"
+
